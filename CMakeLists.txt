@@ -7,5 +7,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
 
-# Compile executable
-add_executable(Render src/main.cpp)
+# import Polyscope
+include(FetchContent)
+FetchContent_Declare(
+  polyscope
+  GIT_REPOSITORY https://github.com/nmwsharp/polyscope.git
+  GIT_TAG v2.5.0
+)
+FetchContent_MakeAvailable(polyscope)
+
+add_executable(Render
+  src/main.cpp
+)
+
+# Polyscope automatically links OpenGL, GLFW, and other dependencies
+target_link_libraries(Render PRIVATE polyscope)

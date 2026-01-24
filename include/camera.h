@@ -3,17 +3,28 @@
 
 #include "vec3.h"
 #include <stdexcept>
+#include <cmath>
 
 class camera {
   public:
-    // Constructor with parameters
-    camera(point3 pos = point3(0, 0, 0), int width = 100, int height = 100)
-        : center(pos), image_width(width), image_height(height) {
+    camera(point3 pos = point3(0, 0, 0), 
+           point3 lookAt = point3(0, 1, 0),
+           vec3 up = vec3(0, 0, 1),
+           double focal_length_mm = 50.0,     // e.g. 50mm
+           double sensor_height_mm = 24.0,    // e.g. 24mm (full-frame)
+           int width = 100, int height = 100)
+        : center(pos), look_at(lookAt), up_vector(up), 
+          focal_length_mm(focal_length_mm), sensor_height_mm(sensor_height_mm),
+          pixel_width(width), pixel_height(height) {
         initialize();
     }
 
-    int image_width  = 100;
-    int image_height = 100;
+    int pixel_width  = 100;
+    int pixel_height = 100;
+
+    point3 get_center() const {
+        return center;
+    }
 
     // Get pixel position by x, y index
     point3 get_pixel_position(int i, int j) const {
@@ -21,36 +32,51 @@ class camera {
     }
 
   private:
-    point3 center;         // Camera center
-    point3 pixel00_loc;    // Location of pixel 0, 0
-    vec3   pixel_delta_u;  // Offset to pixel to the right
-    vec3   pixel_delta_v;  // Offset to pixel below
+    point3 center;              // Camera center
+    point3 look_at;             // Look-at point (optical axis direction)
+    vec3   up_vector;           // Up vector (up direction)
+    double focal_length_mm;
+    double sensor_height_mm;
+    point3 pixel00_loc;         // 3D location of pixel 0, 0
+    vec3   pixel_delta_u;       // Offset to pixel to the right
+    vec3   pixel_delta_v;       // Offset to pixel to the bottom
 
     void initialize() {
         // Validate image dimensions
-        if (image_width < 1) {
-            throw std::runtime_error("Error: image_width must be >= 1");
+        if (pixel_width < 1) {
+            throw std::runtime_error("Error: pixel_width must be >= 1");
         }
-        if (image_height < 1) {
-            throw std::runtime_error("Error: image_height must be >= 1");
+        if (pixel_height < 1) {
+            throw std::runtime_error("Error: pixel_height must be >= 1");
         }
 
-        // Determine viewport dimensions.
-        auto focal_length = 1.0;
-        auto viewport_height = 2.0;
-        auto viewport_width = viewport_height * (double(image_width)/image_height);
+        // Calculate camera coordinate system using lookAt and up vector
+        vec3 forward = unit_vector(look_at - center);
+        vec3 right = unit_vector(cross(forward, up_vector));
+        vec3 up_corrected = cross(right, forward);  // ensure it's orthogonal to forward and right
+
+        // convert millimeters to meters (world units)
+        double focal_length_m = focal_length_mm / 1000.0;
+        double sensor_height_m = sensor_height_mm / 1000.0;
+
+        // Compute vertical field of view (vfov)
+        // vfov = 2 * atan(sensor_height / (2 * focal_length))
+        // double vfov_rad = 2.0 * std::atan(sensor_height_m / (2.0 * focal_length_m));
+
+        // Compute viewport size  (for a pinhole camera, viewport_height = sensor_height)
+        double viewport_height = sensor_height_m;
+        double viewport_width = viewport_height * (double(pixel_width) / pixel_height);
 
         // Calculate the vectors across the horizontal and down the vertical viewport edges.
-        auto viewport_u = vec3(viewport_width, 0, 0);
-        auto viewport_v = vec3(0, -viewport_height, 0);
-
-        // Calculate the horizontal and vertical delta vectors from pixel to pixel.
-        pixel_delta_u = viewport_u / image_width;
-        pixel_delta_v = viewport_v / image_height;
+        // viewport_u follows right, viewport_v follows down
+        vec3 viewport_u = viewport_width * right;
+        vec3 viewport_v = -viewport_height * up_corrected;
+        pixel_delta_u = viewport_u / pixel_width;
+        pixel_delta_v = viewport_v / pixel_height;
 
         // Calculate the location of the upper left pixel.
-        auto viewport_upper_left =
-            center - vec3(0, 0, focal_length) - viewport_u/2 - viewport_v/2;
+        point3 viewport_center = center + focal_length_m * forward;  // The viewport center is focal_length_m in front of the camera
+        point3 viewport_upper_left = viewport_center - viewport_u/2 - viewport_v/2;
         pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
     }
 };
