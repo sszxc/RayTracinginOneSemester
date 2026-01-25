@@ -1,12 +1,15 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
-#include "vec3.h"
+#include <glm/glm.hpp>
 #include <stdexcept>
 #include <cmath>
 
 class camera {
   public:
+    using vec3   = glm::dvec3;
+    using point3 = glm::dvec3;
+
     camera(point3 pos = point3(0, 0, 0), 
            point3 lookAt = point3(0, 1, 0),
            vec3 up = vec3(0, 0, 1),
@@ -28,7 +31,7 @@ class camera {
 
     // Get pixel position by x, y index
     point3 get_pixel_position(int i, int j) const {
-        return pixel00_loc + (i * pixel_delta_u) + (j * pixel_delta_v);
+        return pixel00_loc + (double(i) * pixel_delta_u) + (double(j) * pixel_delta_v);
     }
 
   private:
@@ -41,6 +44,14 @@ class camera {
     vec3   pixel_delta_u;       // Offset to pixel to the right
     vec3   pixel_delta_v;       // Offset to pixel to the bottom
 
+
+    static vec3 unit_vector(const vec3& v, const vec3& fallback = vec3(0.0, 0.0, 1.0)) {
+        double len = glm::length(v);
+        const double EPS = 1e-12;
+        if (len < EPS) return fallback;
+        return v / len;
+    }
+
     void initialize() {
         // Validate image dimensions
         if (pixel_width < 1) {
@@ -52,8 +63,8 @@ class camera {
 
         // Calculate camera coordinate system using lookAt and up vector
         vec3 forward = unit_vector(look_at - center);
-        vec3 right = unit_vector(cross(forward, up_vector));
-        vec3 up_corrected = cross(right, forward);  // ensure it's orthogonal to forward and right
+        vec3 right = unit_vector(glm::cross(forward, up_vector));
+        vec3 up_corrected = glm::cross(right, forward);  // ensure it's orthogonal to forward and right
 
         // convert millimeters to meters (world units)
         double focal_length_m = focal_length_mm / 1000.0;
@@ -65,18 +76,18 @@ class camera {
 
         // Compute viewport size  (for a pinhole camera, viewport_height = sensor_height)
         double viewport_height = sensor_height_m;
-        double viewport_width = viewport_height * (double(pixel_width) / pixel_height);
+        double viewport_width = viewport_height * (double(pixel_width) / double(pixel_height));
 
         // Calculate the vectors across the horizontal and down the vertical viewport edges.
         // viewport_u follows right, viewport_v follows down
         vec3 viewport_u = viewport_width * right;
         vec3 viewport_v = -viewport_height * up_corrected;
-        pixel_delta_u = viewport_u / pixel_width;
-        pixel_delta_v = viewport_v / pixel_height;
+        pixel_delta_u = viewport_u / double(pixel_width);
+        pixel_delta_v = viewport_v / double(pixel_height);
 
         // Calculate the location of the upper left pixel.
         point3 viewport_center = center + focal_length_m * forward;  // The viewport center is focal_length_m in front of the camera
-        point3 viewport_upper_left = viewport_center - viewport_u/2 - viewport_v/2;
+        point3 viewport_upper_left = viewport_center - (viewport_u * 0.5) - (viewport_v * 0.5);
         pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
     }
 };
