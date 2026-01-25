@@ -11,11 +11,14 @@
 #include "polyscope/polyscope.h"
 #include "polyscope/curve_network.h"
 
+
 namespace viz {
 
 // Convert our point3/vec3 type to glm::vec3 for Polyscope
-inline glm::vec3 to_glm_vec3(const point3& p) {
-    return glm::vec3(p.x(), p.y(), p.z());
+inline glm::vec3 to_glm_vec3(const camera::point3& p) {
+    return glm::vec3( static_cast<float>(p.x),
+        static_cast<float>(p.y),
+        static_cast<float>(p.z));
 }
 
 // Initialize Polyscope and set Z-up view convention.
