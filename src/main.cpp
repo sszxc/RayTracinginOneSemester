@@ -12,14 +12,17 @@
 
 int main()
 {
+
+    using point3 = glm::dvec3;
+    using vec3 = glm::dvec3;
     // World units: meters (m)
     point3 camera_position(0.3, 0.4, 0.5);  // Camera position
     point3 look_at(0, 0, 0);                // Look-at point
     vec3 up(0, 0, 1);                       // Up direction
     double focal_length_mm = 35.0;
     double sensor_height_mm = 24.0;         // full-frame sensor
-    int pixel_width = 16;
-    int pixel_height = 9;
+    int pixel_width = 10;
+    int pixel_height = 2;
     
     camera cam(camera_position, look_at, up, focal_length_mm, sensor_height_mm, pixel_width, pixel_height);
 
@@ -51,7 +54,10 @@ int main()
             ray_nodes.push_back(viz::to_glm_vec3(pixel_pos));
             ray_edges.push_back({cam_node_idx, pixel_node_idx});
 
-            std::cout << "Pixel (" << i << ", " << j << "): " << pixel_pos << std::endl;
+            std::cout << "Pixel (" << i << ", " << j << "): ("
+            << pixel_pos.x << ", " << pixel_pos.y << ", " << pixel_pos.z << ")"
+            << std::endl;
+
         }
     }
 
