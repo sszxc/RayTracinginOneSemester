@@ -27,3 +27,27 @@ endif()
 
 # Polyscope automatically links OpenGL, GLFW, and other dependencies
 target_link_libraries(Render PRIVATE polyscope)
+
+# ---- Tests (Catch2) ----
+enable_testing()
+
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG v3.5.4
+)
+FetchContent_MakeAvailable(Catch2)
+
+add_executable(test_camera
+  tests/test_camera.cpp
+)
+
+target_include_directories(test_camera PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+if(glm_FOUND)
+  target_link_libraries(test_camera PRIVATE glm::glm)
+endif()
+
+target_link_libraries(test_camera PRIVATE Catch2::Catch2WithMain)
+
+add_test(NAME CameraTests COMMAND test_camera)
