@@ -20,5 +20,10 @@ add_executable(Render
   src/main.cpp
 )
 
+find_package(glm QUIET)
+if(glm_FOUND)
+  target_link_libraries(Render PRIVATE glm::glm)
+endif()
+
 # Polyscope automatically links OpenGL, GLFW, and other dependencies
 target_link_libraries(Render PRIVATE polyscope)
