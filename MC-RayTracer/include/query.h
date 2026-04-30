@@ -299,6 +299,9 @@ void render(
     Vec3* __restrict__ output,
     Vec3* __restrict__ albedo_aov = nullptr,
     Vec3* __restrict__ normal_aov = nullptr,
+    float* __restrict__ depth_aov = nullptr,
+    float* __restrict__ shadow_aov = nullptr,
+    Vec3* __restrict__ direct_diffuse_aov = nullptr,
     int nee_mode = 2,
     const HomogeneousMedium* __restrict__ objectMedia = nullptr,
     int numObjectMedia = 0,
@@ -715,7 +718,8 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
     int numTextures = 0,
     const VolumeRegionGPU* __restrict__ volumeRegions = nullptr,
     int numVolumeRegions = 0,
-    const HDRTextureData* __restrict__ hdri = nullptr)
+    const HDRTextureData* __restrict__ hdri = nullptr,
+    Vec3* out_direct_diffuse = nullptr)
 {
     if (maxDepth <= 0) return make_vec3(0.0f, 0.0f, 0.0f);
 
@@ -727,6 +731,7 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
     Vec3  prev_N     = make_vec3(0.0f, 0.0f, 0.0f);
     bool  prev_medium_event = false;
     Vec3  prev_scatter_pos  = make_vec3(0.0f, 0.0f, 0.0f);
+    bool wrote_primary_direct_diffuse = false;
 
     for (int depth = 0; depth < maxDepth; ++depth) {
 
@@ -994,6 +999,10 @@ HYBRID_FUNC inline Vec3 TraceRayIterative(
         Vec3 direct = ShadeDirect(ray, hitRecord, lights, numLights,
                                   numTriangles, nodes, aabbs, triangles,
                                   objectMedia, numObjectMedia, triObjectIds);
+        if (!wrote_primary_direct_diffuse && out_direct_diffuse != nullptr) {
+            *out_direct_diffuse = direct;
+            wrote_primary_direct_diffuse = true;
+        }
         radiance = radiance + throughput * direct;
 
         const Vec3  N  = normalize(hitRecord.normal);

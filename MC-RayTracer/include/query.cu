@@ -8,6 +8,13 @@
 #include <cfloat>
 #include <cmath>
 
+HYBRID_FUNC inline int chooseShadowLightIndex(const Light* lights, int numLights) {
+    if (lights == nullptr || numLights <= 0) return -1;
+    for (int i = 0; i < numLights; ++i) {
+        if (lights[i].type == 2) return i;
+    }
+    return 0;
+}
 
 #ifdef __CUDACC__
 
@@ -35,6 +42,9 @@ renderBatchCUDA(const int numTriangles,
        Vec3* __restrict__ output,
        Vec3* __restrict__ albedo_aov,
        Vec3* __restrict__ normal_aov,
+       float* __restrict__ depth_aov,
+       float* __restrict__ shadow_aov,
+       Vec3* __restrict__ direct_diffuse_aov,
        int nee_mode,
        const HomogeneousMedium* __restrict__ objectMedia,
        int numObjectMedia,
@@ -86,6 +96,7 @@ renderBatchCUDA(const int numTriangles,
                 volumeRegions, numVolumeRegions,
                 splat_buffer, &cam, W, H);
         } else {
+            Vec3 direct_diffuse = make_vec3(0.0f, 0.0f, 0.0f);
             color = TraceRayIterative(
                 ray,
                 max_depth,
@@ -101,27 +112,59 @@ renderBatchCUDA(const int numTriangles,
                 objectMedia, numObjectMedia,
                 textures, numTextures,
                 volumeRegions, numVolumeRegions,
-                hdri
+                hdri,
+                &direct_diffuse
             );
+            if (s == 0 && direct_diffuse_aov != nullptr) {
+                direct_diffuse_aov[pix_id] = direct_diffuse;
+            }
         }
         batch_accum = batch_accum + color;
 
         // Write AOV buffers on the very first sample
-        if (s == 0 && albedo_aov != nullptr && normal_aov != nullptr) {
+        if (s == 0) {
             HitRecord aovHit;
             SearchBVH(numTriangles, ray, nodes, aabbs, triangles, aovHit);
             if (aovHit.hit) {
                 assignMaterialToHit(aovHit, numTriangles, triObjectIds,
                                     objectMaterials, numObjectMaterials,
                                     textures, numTextures);
-                albedo_aov[pix_id] = aovHit.mat.albedo;
-                normal_aov[pix_id] = normalize(aovHit.normal);
+                if (albedo_aov != nullptr) {
+                    albedo_aov[pix_id] = aovHit.mat.albedo;
+                }
+                if (normal_aov != nullptr) {
+                    normal_aov[pix_id] = normalize(aovHit.normal);
+                }
+                if (depth_aov != nullptr) {
+                    depth_aov[pix_id] = static_cast<float>(aovHit.t);
+                }
+                if (shadow_aov != nullptr) {
+                    const int light_idx = chooseShadowLightIndex(lights, numLights);
+                    if (light_idx >= 0) {
+                        const bool occluded = IsInShadow(aovHit.p, normalize(aovHit.normal),
+                                                         lights[light_idx], triangles,
+                                                         numTriangles, nodes, aabbs);
+                        shadow_aov[pix_id] = occluded ? 0.0f : 1.0f;
+                    } else {
+                        shadow_aov[pix_id] = 0.0f;
+                    }
+                }
             } else {
                 Vec3 sky = (hdri && hdri->width > 0)
                            ? sampleHDRI(*hdri, ray.direction())
                            : missColor;
-                albedo_aov[pix_id] = sky;
-                normal_aov[pix_id] = make_vec3(0.0f, 0.0f, 0.0f);
+                if (albedo_aov != nullptr) {
+                    albedo_aov[pix_id] = sky;
+                }
+                if (normal_aov != nullptr) {
+                    normal_aov[pix_id] = make_vec3(0.0f, 0.0f, 0.0f);
+                }
+                if (depth_aov != nullptr) {
+                    depth_aov[pix_id] = 0.0f;
+                }
+                if (shadow_aov != nullptr) {
+                    shadow_aov[pix_id] = 0.0f;
+                }
             }
         }
     }
@@ -178,6 +221,9 @@ void render(
     Vec3* __restrict__ output,
     Vec3* __restrict__ albedo_aov,
     Vec3* __restrict__ normal_aov,
+    float* __restrict__ depth_aov,
+    float* __restrict__ shadow_aov,
+    Vec3* __restrict__ direct_diffuse_aov,
     int nee_mode,
     const HomogeneousMedium* __restrict__ objectMedia,
     int numObjectMedia,
@@ -232,6 +278,9 @@ void render(
             output,
             albedo_aov,
             normal_aov,
+            depth_aov,
+            shadow_aov,
+            direct_diffuse_aov,
             nee_mode,
             objectMedia, numObjectMedia,
             textures, numTextures,
@@ -283,6 +332,7 @@ void render(
                         textures, numTextures,
                         volumeRegions, numVolumeRegions);
                 } else {
+                    Vec3 direct_diffuse = make_vec3(0.0f, 0.0f, 0.0f);
                     col = col + TraceRayIterative(
                         ray,
                         max_depth,
@@ -298,23 +348,55 @@ void render(
                         objectMedia, numObjectMedia,
                         textures, numTextures,
                         volumeRegions, numVolumeRegions,
-                        hdri
+                        hdri,
+                        &direct_diffuse
                     );
+                    if (si == 0 && direct_diffuse_aov != nullptr) {
+                        direct_diffuse_aov[pix_id] = direct_diffuse;
+                    }
                 }
 
                 // Write AOVs on first sample
-                if (si == 0 && albedo_aov != nullptr && normal_aov != nullptr) {
+                if (si == 0) {
                     HitRecord aovHit;
                     SearchBVH(triCount, ray, nodes, aabbs, triangles, aovHit);
                     if (aovHit.hit) {
                         assignMaterialToHit(aovHit, triCount, triObjectIds,
                                             objectMaterials, numObjectMaterials,
                                             textures, numTextures);
-                        albedo_aov[pix_id] = aovHit.mat.albedo;
-                        normal_aov[pix_id] = normalize(aovHit.normal);
+                        if (albedo_aov != nullptr) {
+                            albedo_aov[pix_id] = aovHit.mat.albedo;
+                        }
+                        if (normal_aov != nullptr) {
+                            normal_aov[pix_id] = normalize(aovHit.normal);
+                        }
+                        if (depth_aov != nullptr) {
+                            depth_aov[pix_id] = static_cast<float>(aovHit.t);
+                        }
+                        if (shadow_aov != nullptr) {
+                            const int light_idx = chooseShadowLightIndex(lights, numLights);
+                            if (light_idx >= 0) {
+                                const bool occluded = IsInShadow(aovHit.p, normalize(aovHit.normal),
+                                                                 lights[light_idx], triangles,
+                                                                 triCount, nodes, aabbs);
+                                shadow_aov[pix_id] = occluded ? 0.0f : 1.0f;
+                            } else {
+                                shadow_aov[pix_id] = 0.0f;
+                            }
+                        }
                     } else {
-                        albedo_aov[pix_id] = missColor;
-                        normal_aov[pix_id] = make_vec3(0.0f, 0.0f, 0.0f);
+                        if (albedo_aov != nullptr) {
+                            albedo_aov[pix_id] = missColor;
+                        }
+                        if (normal_aov != nullptr) {
+                            normal_aov[pix_id] = make_vec3(0.0f, 0.0f, 0.0f);
+                        }
+                        if (depth_aov != nullptr) {
+                            depth_aov[pix_id] = 0.0f;
+                        }
+                        if (shadow_aov != nullptr) {
+                            shadow_aov[pix_id] = 0.0f;
+                        }
                     }
                 }
             }

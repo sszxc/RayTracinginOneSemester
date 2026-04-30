@@ -18,7 +18,7 @@ make -j8
 
 ```bash
 mkdir build_gpu && cd build_gpu
-cmake -DENABLE_GPU=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/gcc-11 ..
+cmake -DENABLE_GPU=ON -DCMAKE_CUDA_COMPILER=/packages/apps/nvhpc/25.7-cuda-12.9/Linux_x86_64/25.7/cuda/12.9/bin/nvcc -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/gcc ..
 make -j8
 ```
 

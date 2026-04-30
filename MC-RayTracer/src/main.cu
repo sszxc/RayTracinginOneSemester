@@ -829,13 +829,6 @@ int main(int argc, char** argv)
     Vec3 miss_color = has_scene ? scene.miss_color : make_vec3(0.0f, 0.0f, 0.0f);
     Camera cam = has_scene ? scene.camera : Camera();
     std::vector<Light> render_lights = scene.lights;
-    {
-        std::vector<Light> point_only;
-        for (const auto& l : render_lights) {
-            if (l.type == 0) point_only.push_back(l);
-        }
-        render_lights = std::move(point_only);
-    }
     const int num_lights = static_cast<int>(render_lights.size());
 
     // ---- Emissive triangle list (rebuildable) ----
@@ -902,6 +895,11 @@ int main(int argc, char** argv)
     const int img_h = cam.pixel_height;
     const int num_pixels = img_w * img_h;
     std::vector<Vec3> image(num_pixels, make_vec3(0.0f, 0.0f, 0.0f));
+    std::vector<Vec3> albedo_aov_host(num_pixels, make_vec3(0.0f, 0.0f, 0.0f));
+    std::vector<Vec3> normal_aov_host(num_pixels, make_vec3(0.0f, 0.0f, 0.0f));
+    std::vector<Vec3> direct_diffuse_aov_host(num_pixels, make_vec3(0.0f, 0.0f, 0.0f));
+    std::vector<float> depth_aov_host(num_pixels, 0.0f);
+    std::vector<float> shadow_aov_host(num_pixels, 0.0f);
 
     // ---- Animated geometry ----
     std::vector<int> cur_path_indices(load_objects.size(), 0);
@@ -989,12 +987,19 @@ int main(int argc, char** argv)
 
     Vec3* d_albedo_aov = nullptr;
     Vec3* d_normal_aov = nullptr;
-    if (use_denoiser) {
-        CHECK_CUDA((cudaMalloc(&d_albedo_aov, sizeof(Vec3) * img_w * img_h)), true);
-        CHECK_CUDA((cudaMalloc(&d_normal_aov, sizeof(Vec3) * img_w * img_h)), true);
-        CHECK_CUDA((cudaMemset(d_albedo_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
-        CHECK_CUDA((cudaMemset(d_normal_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
-    }
+    Vec3* d_direct_diffuse_aov = nullptr;
+    float* d_depth_aov = nullptr;
+    float* d_shadow_aov = nullptr;
+    CHECK_CUDA((cudaMalloc(&d_albedo_aov, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMalloc(&d_normal_aov, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMalloc(&d_direct_diffuse_aov, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMalloc(&d_depth_aov, sizeof(float) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMalloc(&d_shadow_aov, sizeof(float) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMemset(d_albedo_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMemset(d_normal_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMemset(d_direct_diffuse_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMemset(d_depth_aov, 0, sizeof(float) * img_w * img_h)), true);
+    CHECK_CUDA((cudaMemset(d_shadow_aov, 0, sizeof(float) * img_w * img_h)), true);
 
     {
         const int tri_blocks = (static_cast<int>(P) + 256 - 1) / 256;
@@ -1006,7 +1011,7 @@ int main(int argc, char** argv)
            d_triangle_obj_ids, d_object_materials, static_cast<int>(objectMaterials.size()),
            d_lights, num_lights, diffuse_bounce,
            d_emissiveTris, d_emissiveCDF, numEmissiveTris, totalEmissiveArea,
-           d_image, nullptr, nullptr, nee_mode,
+           d_image, nullptr, nullptr, nullptr, nullptr, nullptr, nee_mode,
            d_objectMedia, numObjectMedia,
            d_textures, numTextures,
            d_volumeRegions, numVolumeRegions,
@@ -1164,17 +1169,18 @@ int main(int argc, char** argv)
 
 #ifdef __CUDACC__
         CHECK_CUDA((cudaMemset(d_image, 0, sizeof(Vec3) * img_w * img_h)), true);
-        if (use_denoiser) {
-            CHECK_CUDA((cudaMemset(d_albedo_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
-            CHECK_CUDA((cudaMemset(d_normal_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
-        }
+        CHECK_CUDA((cudaMemset(d_albedo_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+        CHECK_CUDA((cudaMemset(d_normal_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+        CHECK_CUDA((cudaMemset(d_direct_diffuse_aov, 0, sizeof(Vec3) * img_w * img_h)), true);
+        CHECK_CUDA((cudaMemset(d_depth_aov, 0, sizeof(float) * img_w * img_h)), true);
+        CHECK_CUDA((cudaMemset(d_shadow_aov, 0, sizeof(float) * img_w * img_h)), true);
 
         auto start_render = std::chrono::high_resolution_clock::now();
         render(P, img_w, img_h, frame_cam, miss_color, max_depth, spp, bvhState.Nodes, bvhState.AABBs, d_tris,
                d_triangle_obj_ids, d_object_materials, num_om,
                d_lights, num_lights, diffuse_bounce,
                d_emissiveTris, d_emissiveCDF, numEmissiveTris, totalEmissiveArea,
-               d_image, d_albedo_aov, d_normal_aov, nee_mode,
+               d_image, d_albedo_aov, d_normal_aov, d_depth_aov, d_shadow_aov, d_direct_diffuse_aov, nee_mode,
                d_objectMedia, num_media,
                d_textures, numTextures,
                d_volumeRegions, numVolumeRegions,
@@ -1274,6 +1280,11 @@ int main(int argc, char** argv)
         }
 
         CHECK_CUDA((cudaMemcpy(image.data(), d_image, sizeof(Vec3) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
+        CHECK_CUDA((cudaMemcpy(albedo_aov_host.data(), d_albedo_aov, sizeof(Vec3) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
+        CHECK_CUDA((cudaMemcpy(normal_aov_host.data(), d_normal_aov, sizeof(Vec3) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
+        CHECK_CUDA((cudaMemcpy(direct_diffuse_aov_host.data(), d_direct_diffuse_aov, sizeof(Vec3) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
+        CHECK_CUDA((cudaMemcpy(depth_aov_host.data(), d_depth_aov, sizeof(float) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
+        CHECK_CUDA((cudaMemcpy(shadow_aov_host.data(), d_shadow_aov, sizeof(float) * img_w * img_h, cudaMemcpyDeviceToHost)), true);
 #else
         std::vector<Triangle> h_tris(P);
         for (size_t ti = 0; ti < P; ++ti) {
@@ -1293,12 +1304,18 @@ int main(int argc, char** argv)
         }
 
         std::fill(image.begin(), image.end(), make_vec3(0.0f, 0.0f, 0.0f));
+        std::fill(albedo_aov_host.begin(), albedo_aov_host.end(), make_vec3(0.0f, 0.0f, 0.0f));
+        std::fill(normal_aov_host.begin(), normal_aov_host.end(), make_vec3(0.0f, 0.0f, 0.0f));
+        std::fill(direct_diffuse_aov_host.begin(), direct_diffuse_aov_host.end(), make_vec3(0.0f, 0.0f, 0.0f));
+        std::fill(depth_aov_host.begin(), depth_aov_host.end(), 0.0f);
+        std::fill(shadow_aov_host.begin(), shadow_aov_host.end(), 0.0f);
         auto start_render = std::chrono::high_resolution_clock::now();
         render(P, img_w, img_h, frame_cam, miss_color, max_depth, spp, bvhState.Nodes, bvhState.AABBs, h_tris.data(),
                globalMesh.triangleObjIds.data(), objectMaterials.data(), num_om,
                render_lights.data(), num_lights, diffuse_bounce,
                h_emissiveTris.data(), h_emissiveCDF.data(), numEmissiveTris, totalEmissiveArea,
-               image.data(), nullptr, nullptr, nee_mode,
+               image.data(), albedo_aov_host.data(), normal_aov_host.data(),
+               depth_aov_host.data(), shadow_aov_host.data(), direct_diffuse_aov_host.data(), nee_mode,
                objectMediaList.data(), num_media,
                allTextureData.data(), numTextures,
                volumeRegionsList.data(), numVolumeRegions,
@@ -1309,6 +1326,82 @@ int main(int argc, char** argv)
 #endif
 
         const std::string fname = frame_filename(output_filename, frame, keyframes);
+        auto with_suffix = [](const std::string& path, const std::string& suffix) {
+            size_t dot = path.rfind('.');
+            if (dot == std::string::npos) return path + suffix;
+            return path.substr(0, dot) + suffix + path.substr(dot);
+        };
+
+        auto clamp01 = [](float v) {
+            return fminf(fmaxf(v, 0.0f), 1.0f);
+        };
+
+        auto write_rgb_png = [&](const std::string& path, const std::vector<Vec3>& data,
+                                 bool use_reinhard_tonemap, bool normal_remap) {
+            std::vector<unsigned char> png(num_pixels * 3, 0);
+            for (int i = 0; i < num_pixels; ++i) {
+                float r = data[i].x;
+                float g = data[i].y;
+                float b = data[i].z;
+                if (normal_remap) {
+                    const float nlen2 = r * r + g * g + b * b;
+                    if (nlen2 > 1e-8f) {
+                        r = 0.5f * r + 0.5f;
+                        g = 0.5f * g + 0.5f;
+                        b = 0.5f * b + 0.5f;
+                    } else {
+                        r = g = b = 0.0f;
+                    }
+                    png[i * 3 + 0] = static_cast<unsigned char>(255.0f * clamp01(r));
+                    png[i * 3 + 1] = static_cast<unsigned char>(255.0f * clamp01(g));
+                    png[i * 3 + 2] = static_cast<unsigned char>(255.0f * clamp01(b));
+                } else if (use_reinhard_tonemap) {
+                    png[i * 3 + 0] = reinhard(r);
+                    png[i * 3 + 1] = reinhard(g);
+                    png[i * 3 + 2] = reinhard(b);
+                } else {
+                    png[i * 3 + 0] = static_cast<unsigned char>(255.0f * clamp01(r));
+                    png[i * 3 + 1] = static_cast<unsigned char>(255.0f * clamp01(g));
+                    png[i * 3 + 2] = static_cast<unsigned char>(255.0f * clamp01(b));
+                }
+            }
+            stbi_write_png(path.c_str(), img_w, img_h, 3, png.data(), img_w * 3);
+            printf("Image saved to %s\n", path.c_str());
+        };
+
+        auto write_scalar_png = [&](const std::string& path, const std::vector<float>& data, bool normalize_depth) {
+            float min_v = FLT_MAX;
+            float max_v = 0.0f;
+            if (normalize_depth) {
+                for (float v : data) {
+                    if (v > 0.0f) {
+                        min_v = fminf(min_v, v);
+                        max_v = fmaxf(max_v, v);
+                    }
+                }
+            }
+
+            const bool has_valid_depth = (min_v < FLT_MAX && max_v > min_v);
+            std::vector<unsigned char> png(num_pixels * 3, 0);
+            for (int i = 0; i < num_pixels; ++i) {
+                float mapped = 0.0f;
+                if (normalize_depth) {
+                    const float d = data[i];
+                    if (has_valid_depth && d > 0.0f) {
+                        mapped = 1.0f - ((d - min_v) / (max_v - min_v));
+                    }
+                } else {
+                    mapped = data[i];
+                }
+                const unsigned char c = static_cast<unsigned char>(255.0f * clamp01(mapped));
+                png[i * 3 + 0] = c;
+                png[i * 3 + 1] = c;
+                png[i * 3 + 2] = c;
+            }
+            stbi_write_png(path.c_str(), img_w, img_h, 3, png.data(), img_w * 3);
+            printf("Image saved to %s\n", path.c_str());
+        };
+
         std::vector<unsigned char> img_data(num_pixels * 3);
         for (size_t i = 0; i < num_pixels; ++i) {
             img_data[i * 3 + 0] = reinhard(image[i].x);
@@ -1317,6 +1410,12 @@ int main(int argc, char** argv)
         }
         stbi_write_png(fname.c_str(), img_w, img_h, 3, img_data.data(), img_w * 3);
         printf("Image saved to %s\n", fname.c_str());
+
+        write_rgb_png(with_suffix(fname, "_normal"), normal_aov_host, false, true);
+        write_scalar_png(with_suffix(fname, "_depth"), depth_aov_host, true);
+        write_scalar_png(with_suffix(fname, "_shadow"), shadow_aov_host, false);
+        write_rgb_png(with_suffix(fname, "_albedo"), albedo_aov_host, true, false);
+        write_rgb_png(with_suffix(fname, "_direct_diffuse"), direct_diffuse_aov_host, true, false);
     }
 
     {
@@ -1354,6 +1453,9 @@ int main(int argc, char** argv)
     cudaFree(d_image);
     if (d_albedo_aov) cudaFree(d_albedo_aov);
     if (d_normal_aov) cudaFree(d_normal_aov);
+    if (d_direct_diffuse_aov) cudaFree(d_direct_diffuse_aov);
+    if (d_depth_aov) cudaFree(d_depth_aov);
+    if (d_shadow_aov) cudaFree(d_shadow_aov);
     cudaFree(d_lights);
     if (d_emissiveTris) cudaFree(d_emissiveTris);
     if (d_emissiveCDF)  cudaFree(d_emissiveCDF);
